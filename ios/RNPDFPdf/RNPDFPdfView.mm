@@ -136,10 +136,6 @@ using namespace facebook::react;
         _enableAnnotationRendering = newProps.enableAnnotationRendering;
         [updatedPropNames addObject:@"enableAnnotationRendering"];
     }
-    if (_enableDoubleTapZoom != newProps.enableDoubleTapZoom) {
-        _enableDoubleTapZoom = newProps.enableDoubleTapZoom;
-        [updatedPropNames addObject:@"enableDoubleTapZoom"];
-    }
     if (_fitPolicy != newProps.fitPolicy) {
         _fitPolicy = newProps.fitPolicy;
         [updatedPropNames addObject:@"fitPolicy"];
@@ -191,7 +187,7 @@ using namespace facebook::react;
     [self removeGestureRecognizer:_doubleTapRecognizer];
     [self removeGestureRecognizer:_singleTapRecognizer];
     [self removeGestureRecognizer:_pinchRecognizer];
-    [self removeGestureRecognizer:_longPressRecognizer];
+    // [self removeGestureRecognizer:_longPressRecognizer];
     [self removeGestureRecognizer:_doubleTapEmptyRecognizer];
 
     [self initCommonProps];
@@ -246,7 +242,6 @@ using namespace facebook::react;
     _enablePaging = NO;
     _enableRTL = NO;
     _enableAnnotationRendering = YES;
-    _enableDoubleTapZoom = YES;
     _fitPolicy = 2;
     _spacing = 10;
     _singlePage = NO;
@@ -277,12 +272,6 @@ using namespace facebook::react;
     [[_pdfView document] setDelegate: self];
     [_pdfView setDelegate: self];
 
-    // Disable built-in double tap, so as not to conflict with custom recognizers.
-    for (UIGestureRecognizer *recognizer in _pdfView.gestureRecognizers) {
-        if ([recognizer isKindOfClass:[UITapGestureRecognizer class]]) {
-            recognizer.enabled = NO;
-        }
-    }
 
     [self bindTap];
 }
@@ -345,6 +334,7 @@ using namespace facebook::react;
                 }
 
                 _pdfView.document = _pdfDocument;
+
             } else {
 
                 [self notifyOnChangeWithMessage:[[NSString alloc] initWithString:[NSString stringWithFormat:@"error|Load pdf failed. path=%s",_path.UTF8String]]];
@@ -506,16 +496,7 @@ using namespace facebook::react;
         if (_pdfDocument && ([changedProps containsObject:@"path"] || [changedProps containsObject:@"enablePaging"] || [changedProps containsObject:@"horizontal"] || [changedProps containsObject:@"page"])) {
 
             PDFPage *pdfPage = [_pdfDocument pageAtIndex:_page-1];
-            if (pdfPage && _page == 1) {
-                // goToDestination() would be better. However, there is an
-                // error in the pointLeftTop computation that often results in
-                // scrolling to the middle of the page.
-                // Special case workaround to make starting at the first page
-                // align acceptably.
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self->_pdfView goToRect:CGRectMake(0, NSUIntegerMax, 1, 1) onPage:pdfPage];
-                });
-            } else if (pdfPage) {
+            if (pdfPage) {
                 CGRect pdfPageRect = [pdfPage boundsForBox:kPDFDisplayBoxCropBox];
 
                 // some pdf with rotation, then adjust it
@@ -577,7 +558,7 @@ using namespace facebook::react;
     _doubleTapRecognizer = nil;
     _singleTapRecognizer = nil;
     _pinchRecognizer = nil;
-    _longPressRecognizer = nil;
+    // _longPressRecognizer = nil;
     _doubleTapEmptyRecognizer = nil;
 }
 
@@ -675,10 +656,58 @@ using namespace facebook::react;
         }
     }
 
-    NSError *error;
-    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:arrParentsContents options:NSJSONWritingPrettyPrinted error:&error];
+    // NSError *error;
+    // NSData *jsonData = [NSJSONSerialization dataWithJSONObject:arrParentsContents options:NSJSONWritingPrettyPrinted error:&error];
 
+    // NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    
+
+    // My code
+    NSString *searchText = @"surabaya";
+    // PDFSelection *selection =
+    NSArray<PDFSelection *> *selection = [_pdfDocument findString:searchText withOptions:NSCaseInsensitiveSearch];
+
+    // convert the selection to a jsonString
+    // Assuming you have a NSMutableArray to store the JSON objects
+    NSMutableArray *jsonArray = [NSMutableArray array];
+
+// Iterate through the selection array
+for (PDFSelection *pdfSelection in selection) {
+    NSString *selectedText = [pdfSelection string]; // Get the selected text
+    // NSUInteger pageNumber = [pdfSelection pages];
+    for (PDFPage *page in pdfSelection.pages) {
+        NSUInteger pageNumber = [_pdfDocument indexForPage:page] + 1;
+        // Construct a JSON object
+        NSDictionary *jsonObject = @{
+            @"text": selectedText,
+            @"page": @(pageNumber) 
+        };
+
+        // Add the JSON object to the JSON array
+        [jsonArray addObject:jsonObject];
+    }
+
+    // // Construct a JSON object
+    // NSDictionary *jsonObject = @{
+    //     @"text": selectedText,
+    //     @"page": @(pageNumber)
+    // };
+
+    // // Add the JSON object to the JSON array
+    // [jsonArray addObject:jsonObject];
+}
+
+// Convert the JSON array to NSData
+NSError *error;
+NSData *jsonData = [NSJSONSerialization dataWithJSONObject:jsonArray options:NSJSONWritingPrettyPrinted error:&error];
     NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+// Check for errors and use the jsonData as needed
+if (!jsonData) {
+    NSLog(@"Error creating JSON data: %@", error);
+} else {
+    
+    NSLog(@"JSON string: %@", jsonString);
+}
 
     return jsonString;
 
@@ -725,19 +754,6 @@ using namespace facebook::react;
  */
 - (void)handleDoubleTap:(UITapGestureRecognizer *)recognizer
 {
-
-    // Prevent double tap from selecting text.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self->_pdfView clearSelection];
-    });
-
-    // Event appears to be consumed; broadcast for JS.
-    _onChange(@{ @"message": @"pageDoubleTap" });
-
-    if (!_enableDoubleTapZoom) {
-        return;
-    }
-
     // Cycle through min/mid/max scale factors to be consistent with Android
     float min = self->_pdfView.minScaleFactor/self->_fixScaleFactor;
     float max = self->_pdfView.maxScaleFactor/self->_fixScaleFactor;
@@ -869,15 +885,15 @@ using namespace facebook::react;
 
     pinchRecognizer.delegate = self;
 
-    UILongPressGestureRecognizer *longPressRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self
-                                                                                            action:@selector(handleLongPress:)];
+    // UILongPressGestureRecognizer *longPressRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+    //                                                                                         action:@selector(handleLongPress:)];
     // Making sure the allowable movement isn not too narrow
-    longPressRecognizer.allowableMovement=100;
+    // longPressRecognizer.allowableMovement=100;
     // Important: The duration must be long enough to allow taps but not longer than the period in which view opens the magnifying glass
-    longPressRecognizer.minimumPressDuration=0.3;
+    // longPressRecognizer.minimumPressDuration=0.3;
 
-    [self addGestureRecognizer:longPressRecognizer];
-    _longPressRecognizer = longPressRecognizer;
+    // [self addGestureRecognizer:longPressRecognizer];
+    // _longPressRecognizer = longPressRecognizer;
 
     // Override the _pdfView double tap gesture recognizer so that it doesn't confilict with custom double tap
     UITapGestureRecognizer *doubleTapEmptyRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
